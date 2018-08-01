@@ -29,7 +29,8 @@ Kafka Monitor supports Apache Kafka 0.8 to 0.11:
 - Use branch 0.8.2.2 to work with Apache Kafka 0.8
 - Use branch 0.9.0.1 to work with Apache Kafka 0.9
 - Use branch 0.10.2.1 to work with Apache Kafka 0.10
-- Use master branch to work with Apache Kafka 0.11
+- Use branch 0.11.x to work with Apache Kafka 0.11
+- Use master branch to work with Apache Kafka 1.0
 
 
 ### Configuration Tips
@@ -76,7 +77,7 @@ $ ./bin/kafka-monitor-start.sh config/kafka-monitor.properties
 ```
 
 ### Run Kafka Monitor with arbitrary producer/consumer configuration (e.g. SASL enabled client)
-Edit `config/kafka-monitor.properties` to specify custom configurations for prodcuer in the key/value map `produce.producer.props` in
+Edit `config/kafka-monitor.properties` to specify custom configurations for producer in the key/value map `produce.producer.props` in
 `config/kafka-monitor.properties`. Similarly specify configurations for
 consumer as well. The documentation for producer and consumer in the key/value maps can be found in the Apache Kafka wiki.
 
