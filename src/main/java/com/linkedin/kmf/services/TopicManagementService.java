@@ -1,5 +1,5 @@
 /**
- * Copyright 2016 LinkedIn Corp. Licensed under the Apache License, Version 2.0 (the "License"); you may not use this
+ * Copyright 2020 LinkedIn Corp. Licensed under the Apache License, Version 2.0 (the "License"); you may not use this
  * file except in compliance with the License. You may obtain a copy of the License at
  *
  *    http://www.apache.org/licenses/LICENSE-2.0
@@ -14,6 +14,7 @@ import com.linkedin.kmf.services.configs.MultiClusterTopicManagementServiceConfi
 import com.linkedin.kmf.services.configs.TopicManagementServiceConfig;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 
 /**
@@ -26,6 +27,10 @@ public class TopicManagementService implements Service {
   public TopicManagementService(Map<String, Object> props, String serviceName) throws Exception {
     Map<String, Object> serviceProps = createMultiClusterTopicManagementServiceProps(props, serviceName);
     _multiClusterTopicManagementService = new MultiClusterTopicManagementService(serviceProps, serviceName);
+  }
+
+  public CompletableFuture<Void> topicPartitionResult() {
+    return _multiClusterTopicManagementService.topicPartitionResult();
   }
 
   /**
@@ -62,6 +67,7 @@ public class TopicManagementService implements Service {
     _multiClusterTopicManagementService.start();
   }
 
+
   @Override
   public synchronized void stop() {
     _multiClusterTopicManagementService.stop();
@@ -76,5 +82,6 @@ public class TopicManagementService implements Service {
   public void awaitShutdown() {
     _multiClusterTopicManagementService.awaitShutdown();
   }
+
 }
 

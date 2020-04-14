@@ -1,5 +1,5 @@
 /**
- * Copyright 2016 LinkedIn Corp. Licensed under the Apache License, Version 2.0 (the "License"); you may not use this
+ * Copyright 2020 LinkedIn Corp. Licensed under the Apache License, Version 2.0 (the "License"); you may not use this
  * file except in compliance with the License. You may obtain a copy of the License at
  *
  *    http://www.apache.org/licenses/LICENSE-2.0
@@ -7,6 +7,7 @@
  * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
  * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  */
+
 package com.linkedin.kmf;
 
 import com.linkedin.kmf.services.Service;
@@ -14,9 +15,6 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import static org.testng.Assert.assertEquals;
-import static org.testng.Assert.assertFalse;
-
 import java.util.concurrent.atomic.AtomicReference;
 import org.testng.annotations.Test;
 
@@ -28,25 +26,25 @@ public class KafkaMonitorTest {
   public void lifecycleTest() throws Exception {
     KafkaMonitor kafkaMonitor = kafkaMonitor();
 
-    // Nothing should be started
-    assertEquals(FakeService.startCount.get(), 0);
-    assertEquals(FakeService.stopCount.get(), 0);
+    /* Nothing should be started */
+    org.testng.Assert.assertEquals(FakeService.startCount.get(), 0);
+    org.testng.Assert.assertEquals(FakeService.stopCount.get(), 0);
 
-    // Should accept but ignore start because start has not been called
+    /* Should accept but ignore start because start has not been called */
     kafkaMonitor.stop();
-    assertEquals(FakeService.stopCount.get(), 0);
+    org.testng.Assert.assertEquals(FakeService.stopCount.get(), 0);
 
-    // Should start
+    /* Should start */
     kafkaMonitor.start();
-    assertEquals(FakeService.startCount.get(), 1);
+    org.testng.Assert.assertEquals(FakeService.startCount.get(), 1);
 
-    // Should allow start to be called more than once
+    /* Should allow start to be called more than once */
     kafkaMonitor.stop();
     kafkaMonitor.stop();
-    assertEquals(FakeService.startCount.get(), 1);
-    assertEquals(FakeService.stopCount.get(), 1);
+    org.testng.Assert.assertEquals(FakeService.startCount.get(), 1);
+    org.testng.Assert.assertEquals(FakeService.stopCount.get(), 1);
 
-    // Should be allowed to shutdown more than once.
+    /* Should be allowed to shutdown more than once. */
     kafkaMonitor.awaitShutdown();
     kafkaMonitor.awaitShutdown();
   }
@@ -72,16 +70,16 @@ public class KafkaMonitorTest {
     Thread.sleep(100);
     kafkaMonitor.stop();
     t.join(500);
-    assertFalse(t.isAlive());
-    assertEquals(error.get(), null);
+    org.testng.Assert.assertFalse(t.isAlive());
+    org.testng.Assert.assertEquals(error.get(), null);
   }
 
   private KafkaMonitor kafkaMonitor() throws Exception {
     FakeService.clearCounters();
     Map<String, Map> config = new HashMap<>();
     Map<String, Object> fakeServiceConfig = new HashMap<>();
-    config.put("fake-service", fakeServiceConfig);
     fakeServiceConfig.put(KafkaMonitor.CLASS_NAME_CONFIG, FakeService.class.getName());
+    config.put("fake-service", fakeServiceConfig);
     return new KafkaMonitor(config);
   }
 
@@ -112,7 +110,7 @@ public class KafkaMonitorTest {
     public synchronized void stop() {
       _isRunning.compareAndSet(true, false);
       stopCount.incrementAndGet();
-      this.notifyAll();
+      notifyAll();
     }
 
     @Override

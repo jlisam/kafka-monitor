@@ -1,5 +1,5 @@
 /**
- * Copyright 2016 LinkedIn Corp. Licensed under the Apache License, Version 2.0 (the "License"); you may not use this
+ * Copyright 2020 LinkedIn Corp. Licensed under the Apache License, Version 2.0 (the "License"); you may not use this
  * file except in compliance with the License. You may obtain a copy of the License at
  *
  *    http://www.apache.org/licenses/LICENSE-2.0
@@ -7,15 +7,18 @@
  * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
  * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  */
+
 package com.linkedin.kmf.tests;
 
 import com.linkedin.kmf.apps.SingleClusterMonitor;
-import com.linkedin.kmf.services.TopicManagementService;
 import com.linkedin.kmf.services.ConsumeService;
+import com.linkedin.kmf.services.ConsumerFactoryImpl;
 import com.linkedin.kmf.services.ProduceService;
+import com.linkedin.kmf.services.TopicManagementService;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import java.util.Map;
 
 
 /*
@@ -43,16 +46,24 @@ public class BasicEndToEndTest implements Test {
   public BasicEndToEndTest(Map<String, Object> props, String name) throws Exception {
     _name = name;
     _topicManagementService = new TopicManagementService(props, name);
+    CompletableFuture<Void> topicPartitionReady = _topicManagementService.topicPartitionResult();
     _produceService = new ProduceService(props, name);
-    _consumeService = new ConsumeService(props, name);
+    ConsumerFactoryImpl consumerFactory = new ConsumerFactoryImpl(props);
+    _consumeService = new ConsumeService(name, topicPartitionReady, consumerFactory);
   }
 
   @Override
   public void start() {
     _topicManagementService.start();
-    _produceService.start();
-    _consumeService.start();
-    LOG.info(_name + "/BasicEndToEndTest started");
+    CompletableFuture<Void> topicPartitionResult = _topicManagementService.topicPartitionResult();
+    topicPartitionResult.thenRun(() -> {
+      try {
+        _produceService.start();
+        _consumeService.start();
+      } finally {
+        LOG.info("{} /BasicEndToEndTest started.", _name);
+      }
+    });
   }
 
   @Override
@@ -60,7 +71,7 @@ public class BasicEndToEndTest implements Test {
     _topicManagementService.stop();
     _produceService.stop();
     _consumeService.stop();
-    LOG.info(_name + "/BasicEndToEndTest stopped");
+    LOG.info("{} /BasicEndToEndTest stopped.", _name);
   }
 
   @Override
