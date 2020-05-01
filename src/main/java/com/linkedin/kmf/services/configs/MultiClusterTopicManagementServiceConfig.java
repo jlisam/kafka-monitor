@@ -1,5 +1,5 @@
 /**
- * Copyright 2016 LinkedIn Corp. Licensed under the Apache License, Version 2.0 (the "License"); you may not use this
+ * Copyright 2020 LinkedIn Corp. Licensed under the Apache License, Version 2.0 (the "License"); you may not use this
  * file except in compliance with the License. You may obtain a copy of the License at
  *
  *    http://www.apache.org/licenses/LICENSE-2.0
@@ -7,6 +7,7 @@
  * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
  * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  */
+
 package com.linkedin.kmf.services.configs;
 
 import java.util.Map;
@@ -29,6 +30,10 @@ public class MultiClusterTopicManagementServiceConfig extends AbstractConfig {
   public static final String REBALANCE_INTERVAL_MS_DOC = "The gap in ms between the times the cluster balance on the "
       + "monitor topic is checked.  Set this to a large value to disable automatic topic rebalance.";
 
+  public static final String PREFERRED_LEADER_ELECTION_CHECK_INTERVAL_MS_CONFIG = "topic-management.preferred.leader.election.check.interval.ms";
+  public static final String PREFERRED_LEADER_ELECTION_CHECK_INTERVAL_MS_DOC = "The gap in ms between the times to check if preferred leader election"
+      + " can be performed when requested during rebalance";
+
   static {
     CONFIG = new ConfigDef()
       .define(TOPIC_CONFIG,
@@ -40,7 +45,12 @@ public class MultiClusterTopicManagementServiceConfig extends AbstractConfig {
               1000 * 60 * 10,
               atLeast(10),
               ConfigDef.Importance.LOW,
-              REBALANCE_INTERVAL_MS_DOC);
+              REBALANCE_INTERVAL_MS_DOC)
+        .define(PREFERRED_LEADER_ELECTION_CHECK_INTERVAL_MS_CONFIG,
+            ConfigDef.Type.LONG,
+            1000 * 60 * 5,
+            atLeast(5),
+            ConfigDef.Importance.LOW, PREFERRED_LEADER_ELECTION_CHECK_INTERVAL_MS_DOC);
   }
 
   public MultiClusterTopicManagementServiceConfig(Map<?, ?> props) {

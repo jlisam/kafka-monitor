@@ -1,5 +1,5 @@
 /**
- * Copyright 2016 LinkedIn Corp. Licensed under the Apache License, Version 2.0 (the "License"); you may not use this
+ * Copyright 2020 LinkedIn Corp. Licensed under the Apache License, Version 2.0 (the "License"); you may not use this
  * file except in compliance with the License. You may obtain a copy of the License at
  * <p>
  * http://www.apache.org/licenses/LICENSE-2.0
@@ -9,19 +9,11 @@
  */
 package com.linkedin.kmf.services;
 
-import static com.linkedin.kmf.common.Utils.getMBeanAttributeValues;
-
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.linkedin.kmf.common.MbeanAttributeValue;
 import com.linkedin.kmf.common.Utils;
 import com.linkedin.kmf.services.configs.KafkaMetricsReporterServiceConfig;
-import org.apache.kafka.clients.producer.KafkaProducer;
-import org.apache.kafka.clients.producer.ProducerConfig;
-import org.apache.kafka.clients.producer.ProducerRecord;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -29,52 +21,51 @@ import java.util.Properties;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import org.apache.kafka.clients.admin.AdminClient;
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.clients.producer.ProducerRecord;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class KafkaMetricsReporterService implements Service {
-
   private static final Logger LOG = LoggerFactory.getLogger(KafkaMetricsReporterService.class);
   private static final String METRICS_PRODUCER_ID = "kafka-metrics-reporter-id";
-
   private final String _name;
   private final List<String> _metricsNames;
   private final int _reportIntervalSec;
   private final ScheduledExecutorService _executor;
-
   private KafkaProducer<String, String> _producer;
   private final String _brokerList;
   private final String _topic;
-
   private final ObjectMapper _parser = new ObjectMapper();
 
-  public KafkaMetricsReporterService(Map<String, Object> props, String name) throws Exception {
+  public KafkaMetricsReporterService(Map<String, Object> props, String name, AdminClient adminClient) throws Exception {
     _name = name;
     KafkaMetricsReporterServiceConfig config = new KafkaMetricsReporterServiceConfig(props);
     _metricsNames = config.getList(KafkaMetricsReporterServiceConfig.REPORT_METRICS_CONFIG);
     _reportIntervalSec = config.getInt(KafkaMetricsReporterServiceConfig.REPORT_INTERVAL_SEC_CONFIG);
     _executor = Executors.newSingleThreadScheduledExecutor();
-
     _brokerList = config.getString(KafkaMetricsReporterServiceConfig.BOOTSTRAP_SERVERS_CONFIG);
     initializeProducer();
-
     _topic = config.getString(KafkaMetricsReporterServiceConfig.TOPIC_CONFIG);
-    Utils.createTopicIfNotExists(config.getString(KafkaMetricsReporterServiceConfig.ZOOKEEPER_CONNECT_CONFIG),
-                                 _topic,
-                                 config.getInt(KafkaMetricsReporterServiceConfig.TOPIC_REPLICATION_FACTOR),
-                                 0,
-                                 1, // fixed partition count 1
-                                 new Properties());
+    Utils.createTopicIfNotExists(
+        _topic,
+        config.getShort(KafkaMetricsReporterServiceConfig.TOPIC_REPLICATION_FACTOR),
+        0, // parameter is set to 0 here since no matter the number of nodes, the topic partition number should be set to zero.
+        1, // fixed partition count 1
+        new Properties(),
+        adminClient
+    );
   }
 
   @Override
   public synchronized void start() {
-    _executor.scheduleAtFixedRate(new Runnable() {
-      @Override
-      public void run() {
-        try {
-          reportMetrics();
-        } catch (Exception e) {
-          LOG.error(_name + "/KafkaMetricsReporterService failed to report metrics", e);
-        }
+    _executor.scheduleAtFixedRate(() -> {
+      try {
+        reportMetrics();
+      } catch (Exception e) {
+        LOG.error(_name + "/KafkaMetricsReporterService failed to report metrics", e);
       }
     }, _reportIntervalSec, _reportIntervalSec, TimeUnit.SECONDS);
     LOG.info("{}/KafkaMetricsReporterService started", _name);
@@ -102,7 +93,8 @@ public class KafkaMetricsReporterService implements Service {
     LOG.info("{}/KafkaMetricsReporterService shutdown completed", _name);
   }
 
-  private void initializeProducer() throws Exception {
+
+  private void initializeProducer() {
     Properties producerProps = new Properties();
     producerProps.put(ProducerConfig.ACKS_CONFIG, "-1");
     producerProps.put(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG, "20000");
@@ -121,7 +113,7 @@ public class KafkaMetricsReporterService implements Service {
     for (String metricName : _metricsNames) {
       String mbeanExpr = metricName.substring(0, metricName.lastIndexOf(":"));
       String attributeExpr = metricName.substring(metricName.lastIndexOf(":") + 1);
-      List<MbeanAttributeValue> attributeValues = getMBeanAttributeValues(mbeanExpr, attributeExpr);
+      List<MbeanAttributeValue> attributeValues = com.linkedin.kmf.common.Utils.getMBeanAttributeValues(mbeanExpr, attributeExpr);
       for (MbeanAttributeValue attributeValue : attributeValues) {
         String metric = attributeValue.toString();
         String key = metric.substring(0, metric.lastIndexOf("="));
@@ -131,7 +123,7 @@ public class KafkaMetricsReporterService implements Service {
     }
     try {
       LOG.debug("Kafka Metrics Reporter sending metrics = " + _parser.writerWithDefaultPrettyPrinter().writeValueAsString(metrics));
-      _producer.send(new ProducerRecord<String, String>(_topic, _parser.writeValueAsString(metrics)));
+      _producer.send(new ProducerRecord<>(_topic, _parser.writeValueAsString(metrics)));
     } catch (JsonProcessingException e) {
       LOG.warn("unsupported json format: " + metrics, e);
     }

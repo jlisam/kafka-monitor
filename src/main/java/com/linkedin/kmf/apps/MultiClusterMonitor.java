@@ -1,5 +1,5 @@
 /**
- * Copyright 2016 LinkedIn Corp. Licensed under the Apache License, Version 2.0 (the "License"); you may not use this
+ * Copyright 2020 LinkedIn Corp. Licensed under the Apache License, Version 2.0 (the "License"); you may not use this
  * file except in compliance with the License. You may obtain a copy of the License at
  *
  *    http://www.apache.org/licenses/LICENSE-2.0
@@ -7,14 +7,17 @@
  * Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
  * an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  */
+
 package com.linkedin.kmf.apps;
 
 import com.linkedin.kmf.apps.configs.MultiClusterMonitorConfig;
 import com.linkedin.kmf.services.ConsumeService;
+import com.linkedin.kmf.services.ConsumerFactoryImpl;
 import com.linkedin.kmf.services.MultiClusterTopicManagementService;
 import com.linkedin.kmf.services.ProduceService;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -29,7 +32,7 @@ import org.slf4j.LoggerFactory;
 public class MultiClusterMonitor implements App {
   private static final Logger LOG = LoggerFactory.getLogger(MultiClusterMonitor.class);
 
-  private final MultiClusterTopicManagementService _topicManagementService;
+  private final MultiClusterTopicManagementService _multiClusterTopicManagementService;
   private final ProduceService _produceService;
   private final ConsumeService _consumeService;
   private final String _name;
@@ -37,9 +40,11 @@ public class MultiClusterMonitor implements App {
   public MultiClusterMonitor(Map<String, Object> props, String name) throws Exception {
     _name = name;
     MultiClusterMonitorConfig config = new MultiClusterMonitorConfig(props);
-    _topicManagementService = new MultiClusterTopicManagementService(createMultiClusterTopicManagementServiceProps(props, config), name);
+    _multiClusterTopicManagementService = new MultiClusterTopicManagementService(createMultiClusterTopicManagementServiceProps(props, config), name);
+    CompletableFuture<Void> topicPartitionReady = _multiClusterTopicManagementService.topicPartitionResult();
     _produceService = new ProduceService(createProduceServiceProps(props, config), name);
-    _consumeService = new ConsumeService(createConsumeServiceProps(props, config), name);
+    ConsumerFactoryImpl consumerFactory = new ConsumerFactoryImpl(createConsumeServiceProps(props, config));
+    _consumeService = new ConsumeService(name, topicPartitionReady, consumerFactory);
   }
 
   @SuppressWarnings("unchecked")
@@ -70,15 +75,18 @@ public class MultiClusterMonitor implements App {
 
   @Override
   public void start() {
-    _topicManagementService.start();
-    _produceService.start();
-    _consumeService.start();
-    LOG.info(_name + "/MultiClusterMonitor started");
+    _multiClusterTopicManagementService.start();
+    CompletableFuture<Void> topicPartitionResult = _multiClusterTopicManagementService.topicPartitionResult();
+    topicPartitionResult.thenRun(() -> {
+      _produceService.start();
+      _consumeService.start();
+    });
+    LOG.info(_name + "/MultiClusterMonitor started.");
   }
 
   @Override
   public void stop() {
-    _topicManagementService.stop();
+    _multiClusterTopicManagementService.stop();
     _produceService.stop();
     _consumeService.stop();
     LOG.info(_name + "/MultiClusterMonitor stopped");
@@ -86,12 +94,12 @@ public class MultiClusterMonitor implements App {
 
   @Override
   public boolean isRunning() {
-    return _topicManagementService.isRunning() && _produceService.isRunning() && _consumeService.isRunning();
+    return _multiClusterTopicManagementService.isRunning() && _produceService.isRunning() && _consumeService.isRunning();
   }
 
   @Override
   public void awaitShutdown() {
-    _topicManagementService.awaitShutdown();
+    _multiClusterTopicManagementService.awaitShutdown();
     _produceService.awaitShutdown();
     _consumeService.awaitShutdown();
   }

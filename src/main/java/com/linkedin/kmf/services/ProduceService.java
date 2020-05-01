@@ -1,5 +1,5 @@
 /**
- * Copyright 2016 LinkedIn Corp. Licensed under the Apache License, Version 2.0 (the "License"); you may not use this
+ * Copyright 2020 LinkedIn Corp. Licensed under the Apache License, Version 2.0 (the "License"); you may not use this
  * file except in compliance with the License. You may obtain a copy of the License at
  *
  *    http://www.apache.org/licenses/LICENSE-2.0
@@ -16,12 +16,14 @@ import com.linkedin.kmf.producer.KMBaseProducer;
 import com.linkedin.kmf.producer.NewProducer;
 import com.linkedin.kmf.services.configs.ProduceServiceConfig;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
@@ -29,12 +31,15 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import org.apache.kafka.clients.admin.AdminClient;
+import org.apache.kafka.clients.admin.TopicDescription;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.RecordMetadata;
+import org.apache.kafka.common.KafkaFuture;
 import org.apache.kafka.common.MetricName;
 import org.apache.kafka.common.config.ConfigException;
+import org.apache.kafka.common.errors.UnknownTopicOrPartitionException;
 import org.apache.kafka.common.metrics.JmxReporter;
-import org.apache.kafka.common.metrics.Measurable;
 import org.apache.kafka.common.metrics.MetricConfig;
 import org.apache.kafka.common.metrics.Metrics;
 import org.apache.kafka.common.metrics.MetricsReporter;
@@ -52,11 +57,10 @@ import org.slf4j.LoggerFactory;
 public class ProduceService implements Service {
   private static final Logger LOG = LoggerFactory.getLogger(ProduceService.class);
   private static final String METRIC_GROUP_NAME = "produce-service";
-  private static final String[] NONOVERRIDABLE_PROPERTIES = new String[]{
+  private static final String[] NON_OVERRIDABLE_PROPERTIES = new String[]{
     ProduceServiceConfig.BOOTSTRAP_SERVERS_CONFIG,
     ProduceServiceConfig.ZOOKEEPER_CONNECT_CONFIG
   };
-
   private final String _name;
   private final ProduceMetrics _sensors;
   private KMBaseProducer _producer;
@@ -77,15 +81,15 @@ public class ProduceService implements Service {
   private final Map _producerPropsOverride;
   private final String _producerClassName;
   private final int _threadsNum;
-  private final String _zkConnect;
   private final boolean _treatZeroThroughputAsUnavailable;
   private final int _latencyPercentileMaxMs;
   private final int _latencyPercentileGranularityMs;
+  private final AdminClient _adminClient;
+  private static final String KEY_SERIALIZER_CLASS = "org.apache.kafka.common.serialization.StringSerializer";
 
   public ProduceService(Map<String, Object> props, String name) throws Exception {
     _name = name;
     ProduceServiceConfig config = new ProduceServiceConfig(props);
-    _zkConnect = config.getString(ProduceServiceConfig.ZOOKEEPER_CONNECT_CONFIG);
     _brokerList = config.getString(ProduceServiceConfig.BOOTSTRAP_SERVERS_CONFIG);
     String producerClass = config.getString(ProduceServiceConfig.PRODUCER_CLASS_CONFIG);
     _latencyPercentileMaxMs = config.getInt(ProduceServiceConfig.LATENCY_PERCENTILE_MAX_MS_CONFIG);
@@ -104,11 +108,13 @@ public class ProduceService implements Service {
     _producerPropsOverride = props.containsKey(ProduceServiceConfig.PRODUCER_PROPS_CONFIG)
       ? (Map) props.get(ProduceServiceConfig.PRODUCER_PROPS_CONFIG) : new HashMap<>();
 
-    for (String property: NONOVERRIDABLE_PROPERTIES) {
+    for (String property: NON_OVERRIDABLE_PROPERTIES) {
       if (_producerPropsOverride.containsKey(property)) {
         throw new ConfigException("Override must not contain " + property + " config.");
       }
     }
+
+    _adminClient = AdminClient.create(props);
 
     if (producerClass.equals(NewProducer.class.getCanonicalName()) || producerClass.equals(NewProducer.class.getSimpleName())) {
       _producerClassName = NewProducer.class.getCanonicalName();
@@ -116,7 +122,7 @@ public class ProduceService implements Service {
       _producerClassName = producerClass;
     }
 
-    initializeProducer();
+    initializeProducer(props);
 
     _produceExecutor = Executors.newScheduledThreadPool(_threadsNum, new ProduceServiceThreadFactory());
     _handleNewPartitionsExecutor = Executors.newSingleThreadScheduledExecutor(new HandleNewPartitionsThreadFactory());
@@ -130,9 +136,7 @@ public class ProduceService implements Service {
     _sensors = new ProduceMetrics(metrics, tags);
   }
 
-
-  private void initializeProducer() throws Exception {
-
+  private void initializeProducer(Map<String, Object> props) throws Exception {
     Properties producerProps = new Properties();
     // Assign default config. This has the lowest priority.
     producerProps.put(ProducerConfig.ACKS_CONFIG, "-1");
@@ -140,13 +144,17 @@ public class ProduceService implements Service {
     producerProps.put(ProducerConfig.RETRIES_CONFIG, "3");
     producerProps.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, Long.MAX_VALUE);
     producerProps.put(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, "1");
-    producerProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.StringSerializer");
-    producerProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.StringSerializer");
+    producerProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, KEY_SERIALIZER_CLASS);
+    producerProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, KEY_SERIALIZER_CLASS);
     // Assign config specified for ProduceService.
     producerProps.put(ProducerConfig.CLIENT_ID_CONFIG, _producerId);
     producerProps.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, _brokerList);
     // Assign config specified for producer. This has the highest priority.
     producerProps.putAll(_producerPropsOverride);
+
+    if (props.containsKey(ProduceServiceConfig.PRODUCER_PROPS_CONFIG)) {
+      props.forEach(producerProps::putIfAbsent);
+    }
 
     _producer = (KMBaseProducer) Class.forName(_producerClassName).getConstructor(Properties.class).newInstance(producerProps);
     LOG.info("{}/ProduceService is initialized.", _name);
@@ -155,10 +163,16 @@ public class ProduceService implements Service {
   @Override
   public synchronized void start() {
     if (_running.compareAndSet(false, true)) {
-      int partitionNum = Utils.getPartitionNumForTopic(_zkConnect, _topic);
-      initializeStateForPartitions(partitionNum);
-      _handleNewPartitionsExecutor.scheduleWithFixedDelay(new NewPartitionHandler(), 1000, 30000, TimeUnit.MILLISECONDS);
-      LOG.info("{}/ProduceService started", _name);
+      try {
+        KafkaFuture<Map<String, TopicDescription>> topicDescriptionsFuture = _adminClient.describeTopics(Collections.singleton(_topic)).all();
+        Map<String, TopicDescription> topicDescriptions = topicDescriptionsFuture.get();
+        int partitionNum = topicDescriptions.get(_topic).partitions().size();
+        initializeStateForPartitions(partitionNum);
+        _handleNewPartitionsExecutor.scheduleWithFixedDelay(new NewPartitionHandler(), 1, 30, TimeUnit.SECONDS);
+        LOG.info("{}/ProduceService started", _name);
+      } catch (InterruptedException | UnknownTopicOrPartitionException | ExecutionException e) {
+        LOG.error("Exception occurred while starting produce service: ", e);
+      }
     }
   }
 
@@ -166,7 +180,7 @@ public class ProduceService implements Service {
     Map<Integer, String> keyMapping = generateKeyMappings(partitionNum);
     for (int partition = 0; partition < partitionNum; partition++) {
       String key = keyMapping.get(partition);
-      //This is what preserves sequence numbers across restarts
+      /* This is what preserves sequence numbers across restarts */
       if (!_nextIndexPerPartition.containsKey(partition)) {
         _nextIndexPerPartition.put(partition, new AtomicLong(0));
         _sensors.addPartitionSensors(partition);
@@ -198,7 +212,7 @@ public class ProduceService implements Service {
       _produceExecutor.shutdown();
       _handleNewPartitionsExecutor.shutdown();
       _producer.close();
-      LOG.info("{}/ProduceService stopped", _name);
+      LOG.info("{}/ProduceService stopped.", _name);
     }
   }
 
@@ -208,10 +222,11 @@ public class ProduceService implements Service {
       _produceExecutor.awaitTermination(Integer.MAX_VALUE, TimeUnit.MILLISECONDS);
       _handleNewPartitionsExecutor.awaitTermination(Integer.MAX_VALUE, TimeUnit.MILLISECONDS);
     } catch (InterruptedException e) {
-      LOG.info("Thread interrupted when waiting for {}/ProduceService to shutdown", _name);
+      LOG.info("Thread interrupted when waiting for {}/ProduceService to shutdown.", _name);
     }
-    LOG.info("{}/ProduceService shutdown completed", _name);
+    LOG.info("{}/ProduceService shutdown completed.", _name);
   }
+
 
   @Override
   public boolean isRunning() {
@@ -219,20 +234,22 @@ public class ProduceService implements Service {
   }
 
   private class ProduceMetrics {
-    public final Metrics metrics;
+    public final Metrics _metrics;
     private final Sensor _recordsProduced;
     private final Sensor _produceError;
     private final Sensor _produceDelay;
     private final ConcurrentMap<Integer, Sensor> _recordsProducedPerPartition;
     private final ConcurrentMap<Integer, Sensor> _produceErrorPerPartition;
+    private final ConcurrentMap<Integer, Boolean> _produceErrorInLastSendPerPartition;
     private final Map<String, String> _tags;
 
     public ProduceMetrics(final Metrics metrics, final Map<String, String> tags) {
-      this.metrics = metrics;
-      this._tags = tags;
+      _metrics = metrics;
+      _tags = tags;
 
       _recordsProducedPerPartition = new ConcurrentHashMap<>();
       _produceErrorPerPartition = new ConcurrentHashMap<>();
+      _produceErrorInLastSendPerPartition = new ConcurrentHashMap<>();
 
       _recordsProduced = metrics.sensor("records-produced");
       _recordsProduced.add(new MetricName("records-produced-rate", METRIC_GROUP_NAME, "The average number of records per second that are produced", tags), new Rate());
@@ -251,48 +268,52 @@ public class ProduceService implements Service {
       int sizeInBytes = 4 * bucketNum;
       _produceDelay.add(new Percentiles(sizeInBytes, _latencyPercentileMaxMs, Percentiles.BucketSizing.CONSTANT,
           new Percentile(new MetricName("produce-delay-ms-99th", METRIC_GROUP_NAME, "The 99th percentile delay in ms for produce request", tags), 99.0),
-          new Percentile(new MetricName("produce-delay-ms-999th", METRIC_GROUP_NAME, "The 999th percentile delay in ms for produce request", tags), 99.9)));
+          new Percentile(new MetricName("produce-delay-ms-999th", METRIC_GROUP_NAME, "The 99.9th percentile delay in ms for produce request", tags), 99.9),
+          new Percentile(new MetricName("produce-delay-ms-9999th", METRIC_GROUP_NAME, "The 99.99th percentile delay in ms for produce request", tags), 99.99)));
 
       metrics.addMetric(new MetricName("produce-availability-avg", METRIC_GROUP_NAME, "The average produce availability", tags),
-        new Measurable() {
-          @Override
-          public double measure(MetricConfig config, long now) {
-            double availabilitySum = 0.0;
-            int partitionNum = _partitionNum.get();
-            for (int partition = 0; partition < partitionNum; partition++) {
-              double recordsProduced = metrics.metrics().get(metrics.metricName("records-produced-rate-partition-" + partition, METRIC_GROUP_NAME, tags)).value();
-              double produceError = metrics.metrics().get(metrics.metricName("produce-error-rate-partition-" + partition, METRIC_GROUP_NAME, tags)).value();
-              // If there is no error, error rate sensor may expire and the value may be NaN. Treat NaN as 0 for error rate.
-              if (Double.isNaN(produceError) || Double.isInfinite(produceError)) {
-                produceError = 0;
-              }
-              // If there is either succeeded or failed produce to a partition, consider its availability as 0.
-              if (recordsProduced + produceError > 0) {
-                availabilitySum += recordsProduced / (recordsProduced + produceError);
-              } else if (!_treatZeroThroughputAsUnavailable) {
-                // If user configures treatZeroThroughputAsUnavailable to be false, a partition's availability
-                // is 1.0 as long as there is no exception thrown from producer.
-                // This allows kafka admin to exactly monitor the availability experienced by Kafka users which
-                // will block and retry for a certain amount of time based on its configuration (e.g. retries, retry.backoff.ms).
-                // Note that if it takes a long time for messages to be retries and sent, the latency in the ConsumeService
-                // will increase and it will reduce ConsumeAvailability if the latency exceeds consume.latency.sla.ms
+        (config, now) -> {
+          double availabilitySum = 0.0;
+          int partitionNum = _partitionNum.get();
+          for (int partition = 0; partition < partitionNum; partition++) {
+            double recordsProduced = metrics.metrics().get(metrics.metricName("records-produced-rate-partition-" + partition, METRIC_GROUP_NAME, tags)).value();
+            double produceError = metrics.metrics().get(metrics.metricName("produce-error-rate-partition-" + partition, METRIC_GROUP_NAME, tags)).value();
+            // If there is no error, error rate sensor may expire and the value may be NaN. Treat NaN as 0 for error rate.
+            if (Double.isNaN(produceError) || Double.isInfinite(produceError)) {
+              produceError = 0;
+            }
+            // If there is either succeeded or failed produce to a partition, consider its availability as 0.
+            if (recordsProduced + produceError > 0) {
+              availabilitySum += recordsProduced / (recordsProduced + produceError);
+            } else if (!_treatZeroThroughputAsUnavailable) {
+              // If user configures treatZeroThroughputAsUnavailable to be false, a partition's availability
+              // is 1.0 as long as there is no exception thrown from producer.
+              // This allows kafka admin to exactly monitor the availability experienced by Kafka users which
+              // will block and retry for a certain amount of time based on its configuration (e.g. retries, retry.backoff.ms).
+              // Note that if it takes a long time for messages to be retries and sent, the latency in the ConsumeService
+              // will increase and it will reduce ConsumeAvailability if the latency exceeds consume.latency.sla.ms
+              // If timeout is set to more than 60 seconds (the current samples window duration),
+              // the error sample might be expired before the next error can be produced.
+              // In order to detect offline partition with high producer timeout config, the error status during last
+              // send is also checked before declaring 1.0 availability for the partition.
+              Boolean lastSendError = _produceErrorInLastSendPerPartition.get(partition);
+              if (lastSendError == null || !lastSendError) {
                 availabilitySum += 1.0;
               }
             }
-            // Assign equal weight to per-partition availability when calculating overall availability
-            return availabilitySum / partitionNum;
           }
-        }
-      );
+          // Assign equal weight to per-partition availability when calculating overall availability
+          return availabilitySum / partitionNum;
+        });
     }
 
     void addPartitionSensors(int partition) {
-      Sensor recordsProducedSensor = metrics.sensor("records-produced-partition-" + partition);
+      Sensor recordsProducedSensor = _metrics.sensor("records-produced-partition-" + partition);
       recordsProducedSensor.add(new MetricName("records-produced-rate-partition-" + partition, METRIC_GROUP_NAME,
           "The average number of records per second that are produced to this partition", _tags), new Rate());
       _recordsProducedPerPartition.put(partition, recordsProducedSensor);
 
-      Sensor errorsSensor = metrics.sensor("produce-error-partition-" + partition);
+      Sensor errorsSensor = _metrics.sensor("produce-error-partition-" + partition);
       errorsSensor.add(new MetricName("produce-error-rate-partition-" + partition, METRIC_GROUP_NAME,
           "The average number of errors per second when producing to this partition", _tags), new Rate());
       _produceErrorPerPartition.put(partition, errorsSensor);
@@ -321,6 +342,7 @@ public class ProduceService implements Service {
         _sensors._produceDelay.record(System.currentTimeMillis() - currMs);
         _sensors._recordsProduced.record();
         _sensors._recordsProducedPerPartition.get(_partition).record();
+        _sensors._produceErrorInLastSendPerPartition.put(_partition, false);
         if (nextIndex == -1 && _sync) {
           nextIndex = metadata.offset();
         } else {
@@ -330,6 +352,7 @@ public class ProduceService implements Service {
       } catch (Exception e) {
         _sensors._produceError.record();
         _sensors._produceErrorPerPartition.get(_partition).record();
+        _sensors._produceErrorInLastSendPerPartition.put(_partition, true);
         LOG.warn(_name + " failed to send message", e);
       }
     }
@@ -342,35 +365,40 @@ public class ProduceService implements Service {
    * sensors are added for the new partitions.
    */
   private class NewPartitionHandler implements Runnable {
-
     public void run() {
       LOG.debug("{}/ProduceService check partition number for topic {}.", _name, _topic);
-
-      int currentPartitionNum = Utils.getPartitionNumForTopic(_zkConnect, _topic);
-      if (currentPartitionNum <= 0) {
-        LOG.info("{}/ProduceService topic {} does not exist.", _name, _topic);
-        return;
-      } else if (currentPartitionNum == _partitionNum.get()) {
-        return;
-      }
-      LOG.info("{}/ProduceService detected new partitions of topic {}", _name, _topic);
-      //TODO: Should the ProduceService exit if we can't restart the producer runnables?
-      _produceExecutor.shutdown();
       try {
-        _produceExecutor.awaitTermination(Integer.MAX_VALUE, TimeUnit.MILLISECONDS);
+        int currentPartitionNum =
+            _adminClient.describeTopics(Collections.singleton(_topic)).all().get().get(_topic).partitions().size();
+        if (currentPartitionNum <= 0) {
+          LOG.info("{}/ProduceService topic {} does not exist.", _name, _topic);
+          return;
+        } else if (currentPartitionNum == _partitionNum.get()) {
+          return;
+        }
+        LOG.info("{}/ProduceService detected new partitions of topic {}", _name, _topic);
+        //TODO: Should the ProduceService exit if we can't restart the producer runnables?
+        _produceExecutor.shutdown();
+        try {
+          _produceExecutor.awaitTermination(Integer.MAX_VALUE, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+          throw new IllegalStateException(e);
+        }
+        _producer.close();
+        try {
+          initializeProducer(new HashMap<>());
+        } catch (Exception e) {
+          LOG.error("Failed to restart producer.", e);
+          throw new IllegalStateException(e);
+        }
+        _produceExecutor = Executors.newScheduledThreadPool(_threadsNum);
+        initializeStateForPartitions(currentPartitionNum);
+        LOG.info("New partitions added to monitoring.");
       } catch (InterruptedException e) {
-        throw new IllegalStateException(e);
+        LOG.error("InterruptedException occurred.", e);
+      } catch (ExecutionException e) {
+        LOG.error("ExecutionException occurred.", e);
       }
-      _producer.close();
-      try {
-        initializeProducer();
-      } catch (Exception e) {
-        LOG.error("Failed to restart producer.", e);
-        throw new IllegalStateException(e);
-      }
-      _produceExecutor = Executors.newScheduledThreadPool(_threadsNum);
-      initializeStateForPartitions(currentPartitionNum);
-      LOG.info("New partitions added to monitoring.");
     }
   }
 

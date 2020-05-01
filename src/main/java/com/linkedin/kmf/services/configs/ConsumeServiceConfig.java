@@ -1,5 +1,5 @@
 /**
- * Copyright 2016 LinkedIn Corp. Licensed under the Apache License, Version 2.0 (the "License"); you may not use this
+ * Copyright 2020 LinkedIn Corp. Licensed under the Apache License, Version 2.0 (the "License"); you may not use this
  * file except in compliance with the License. You may obtain a copy of the License at
  *
  *    http://www.apache.org/licenses/LICENSE-2.0
@@ -13,6 +13,7 @@ import com.linkedin.kmf.consumer.NewConsumer;
 import java.util.Map;
 import org.apache.kafka.common.config.AbstractConfig;
 import org.apache.kafka.common.config.ConfigDef;
+
 
 public class ConsumeServiceConfig extends AbstractConfig {
 
@@ -29,7 +30,7 @@ public class ConsumeServiceConfig extends AbstractConfig {
 
   public static final String CONSUMER_CLASS_CONFIG = "consume.consumer.class";
   public static final String CONSUMER_CLASS_DOC = "Consumer class that will be instantiated as consumer in the consume service. "
-    + "It can be NewConsumer, OldConsumer, or full class name of any class that implements the KMBaseConsumer interface.";
+    + "It can be NewConsumer or full class name of any class that implements the KMBaseConsumer interface.";
 
   public static final String LATENCY_PERCENTILE_MAX_MS_CONFIG = "consume.latency.percentile.max.ms";
   public static final String LATENCY_PERCENTILE_MAX_MS_DOC = "This is used to derive the bucket number used to configure latency percentile metric. "
@@ -79,7 +80,6 @@ public class ConsumeServiceConfig extends AbstractConfig {
                                     20000,
                                     ConfigDef.Importance.MEDIUM,
                                     LATENCY_SLA_MS_DOC);
-
   }
 
   public ConsumeServiceConfig(Map<?, ?> props) {

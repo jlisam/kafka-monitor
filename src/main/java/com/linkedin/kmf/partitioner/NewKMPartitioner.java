@@ -1,5 +1,5 @@
 /**
- * Copyright 2016 LinkedIn Corp. Licensed under the Apache License, Version 2.0 (the "License"); you may not use this
+ * Copyright 2020 LinkedIn Corp. Licensed under the Apache License, Version 2.0 (the "License"); you may not use this
  * file except in compliance with the License. You may obtain a copy of the License at
  *
  *    http://www.apache.org/licenses/LICENSE-2.0
@@ -9,16 +9,15 @@
  */
 package com.linkedin.kmf.partitioner;
 
-import static org.apache.kafka.common.utils.Utils.murmur2;
-
 public class NewKMPartitioner implements KMPartitioner {
 
   public int partition(String key, int partitionNum) {
     byte[] keyBytes = key.getBytes();
-    return toPositive(murmur2(keyBytes)) % partitionNum;
+    return toPositive(org.apache.kafka.common.utils.Utils.murmur2(keyBytes)) % partitionNum;
   }
 
   private static int toPositive(int number) {
     return number & 0x7fffffff;
   }
+
 }
